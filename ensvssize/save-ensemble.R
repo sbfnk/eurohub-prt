@@ -1,4 +1,5 @@
 library(scoringutils)
+library(mgcv)
 library(data.table)
 library(here)
 library(dplyr)
@@ -101,6 +102,12 @@ dattoscore <- dattoscore |>
   rbind(ensdat, fill = TRUE) |>
   DT(, c("location", "forecast_date", "k", "quantile", "horizon", "target_type", "model", "prediction", "true_value"))
 
+setnames(
+  dattoscore,
+  c("prediction", "true_value", "quantile"),
+  c("predicted", "observed", "quantile_level")
+)
+
 ## score by location / target
 scores <- map(loctargets, \(loctarg) {
   loc <- substr(loctarg, 0, 2)
@@ -109,8 +116,24 @@ scores <- map(loctargets, \(loctarg) {
     DT(location == loc) |>
     DT(target_type == targ) |>
     score()
+    as_forecast_quantile() |>
 })
 
-pw <- map(scores, \(score) {
-  pairwise_comparison(score)
-})
+m.formula <- log_interval_score ~
+  # -----------------------------
+  # k
+  s(k) +
+  # Location (country)
+  s(location, bs = "re") +
+  # Affiliation same as target country
+  # CountryTargetAffiliated +
+  # -----------------------------
+  # Observed incidence: interacting with trend; thin plate reg. spline (default)
+  s(time, by = location) +
+  # Horizon (4 levels, ordinal)
+  Horizon
+
+# Fit GAMM with normal distribution
+m.fit <- bam(formula = m.formula,
+             data = scores,
+             family = gaussian())
